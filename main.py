@@ -12,12 +12,18 @@ origins = [
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=False,
+    allow_origins=["http://localhost:8081",
+                    "http://127.0.0.1:8081", 
+                    "http://localhost:3000"],
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+BD_HOST = 'localhost'
+BD_NAME = 'postgres'
+BD_USER = 'postgres'
+BD_PASSWORD = 'fubkz13love'
 
 record = []
 
@@ -29,16 +35,17 @@ class NewUsers(BaseModel):
     email : str
     password : str
 
+class LogUsers(BaseModel):
+    email : str
+    password : str 
+
 @app.get('/')
 def root():
     return "hello world"
 
 @app.get('/showusers')
 def show_users():
-    BD_HOST = 'localhost'
-    BD_NAME = 'postgres'
-    BD_USER = 'postgres'
-    BD_PASSWORD = 'fubkz13love'
+
 
     try: 
         connect = psycopg2.connect(host=BD_HOST, database=BD_NAME, user=BD_USER, password=BD_PASSWORD)
@@ -56,7 +63,7 @@ def show_users():
     except:
         print("Ошибка")
 
-
+#Добавление пользователя 
 @app.post('/users')
 def creat_users(new_users: NewUsers):
 
@@ -68,13 +75,6 @@ def creat_users(new_users: NewUsers):
     user = (new_users.lastName, new_users.firstName, new_users.email, new_users.password)
 
     #подключение postgresql
-    BD_HOST = 'localhost'
-    BD_NAME = 'postgres'
-    BD_USER = 'postgres'
-    BD_PASSWORD = 'fubkz13love'
-
-
-
     try:
         connection = psycopg2.connect(host=BD_HOST, database=BD_NAME, user=BD_USER, password=BD_PASSWORD)
         print('соединение установлено')
@@ -104,9 +104,34 @@ def creat_users(new_users: NewUsers):
 
     except (Exception, psycopg2.Error) as Error:
         print("ошибка", Error)
-        if 'connection' in locals():  # проверяем, что connection существует
-            connection.close()       # ✅ СКОБКИ!
+        if 'connection' in locals():
+            connection.close() 
         return {"error": "Ошибка базы данных"}, 500
+    
+#Проверка логина
+@app.post("/users_log")
+def users_login(log_user : LogUsers):
+    try: 
+        connect = psycopg2.connect(host=BD_HOST, database=BD_NAME, user=BD_USER, password=BD_PASSWORD)  
+        cursor = connect.cursor()
 
+        cursor.execute("SELECT password_user from users WHERE email = %s", (log_user.email))
+
+        data_user = cursor.fetchone()
+
+        if data_user and data_user[0] == log_user.password:
+            cursor.close()
+            connect.close()
+            return {'message' : 'Успешно'}
+        else:
+            cursor.close()
+            connect.close()
+            return{'message' : 'не правильный логин или пароль'}
+
+    except (Exception, psycopg2.Error) as Error:
+        print(Error)
+        if 'connect' in locals():
+            connect.close()
+        return {"error": "Ошибка базы данных"}, 500
 if __name__ == '__main__':
     uvicorn.run('main:app', reload=True)
