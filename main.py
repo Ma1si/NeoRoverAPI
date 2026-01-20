@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 import uvicorn
 import psycopg2
+import bcrypt
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -30,8 +31,8 @@ record = []
 
 
 class NewUsers(BaseModel): 
-    lastName: str
-    firstName : str
+    firstName: str
+    lastName : str
     email : str
     password : str
 
@@ -65,28 +66,25 @@ def show_users():
 
 #Добавление пользователя 
 @app.post('/users')
-def creat_users(new_users: NewUsers):
-
-    global record
-    record.clear()
-
- 
-
-    user = (new_users.lastName, new_users.firstName, new_users.email, new_users.password)
+def creat_users(new_users: NewUsers): 
 
     #подключение postgresql
     try:
+        password_bytes = new_users.password.encode('utf-8')
+        salt = bcrypt.gensalt(rounds=12)
+        hashed_password = bcrypt.hashpw(password_bytes, salt)
+        user = (new_users.lastName, new_users.firstName, new_users.email, hashed_password)
+
         connection = psycopg2.connect(host=BD_HOST, database=BD_NAME, user=BD_USER, password=BD_PASSWORD)
         print('соединение установлено')
 
         cursor = connection.cursor()
 
         cursor.execute("SELECT email FROM users WHERE email = %s", (new_users.email,))
-        sqlemail = cursor.fetchone()
+        
 
-        if sqlemail:
+        if cursor.fetchone():
             connection.close()
-            cursor.close()
             return {
                 "error" : "Эта почта уже зарегестрирована"
             }, 409
@@ -119,14 +117,22 @@ def users_login(log_user : LogUsers):
 
         data_user = cursor.fetchone()
 
-        if data_user and data_user[0] == log_user.password:
-            cursor.close()
-            connect.close()
-            return {'message' : 'Успешно'}
-        else:
-            cursor.close()
-            connect.close()
-            return{'message' : 'не правильный логин или пароль'}
+        if data_user:
+            stored_hash = data_user[0]
+            input_pass_bytes = log_user.password.encode('utf-8')
+
+            if bcrypt.checkpw(input_pass_bytes, stored_hash):
+                cursor.close()
+                connect.close()
+                return {"message": "Успешный вход"}, 200
+            else:
+                cursor.close()
+                connect.close()
+                return {"message" : "Неверный пароль"}, 401
+            
+        connect.close()
+        cursor.close()
+        return {"message": "Пользователь не найден"}, 404
 
     except (Exception, psycopg2.Error) as Error:
         print(Error)
