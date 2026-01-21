@@ -4,8 +4,14 @@ import psycopg2
 import bcrypt
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from datetime import datetime, timedelta
+import jwt
 
 app = FastAPI()
+
+SECRET_KEY = "fuzkz-z-nt,z-lj-cbp-gjh-k.,k.-dthybcm-rjvyt"
+ALGORITM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 30
 
 origins = [
     'http://localhost:8081/'
@@ -113,18 +119,29 @@ def users_login(log_user : LogUsers):
         connect = psycopg2.connect(host=BD_HOST, database=BD_NAME, user=BD_USER, password=BD_PASSWORD)  
         cursor = connect.cursor()
 
-        cursor.execute("SELECT password_user from users WHERE email = %s", (log_user.email))
+        cursor.execute("SELECT user_id password_user from users WHERE email = %s", (log_user.email))
 
         data_user = cursor.fetchone()
 
         if data_user:
-            stored_hash = data_user[0]
+            user_id, stored_hash = data_user
             input_pass_bytes = log_user.password.encode('utf-8')
 
             if bcrypt.checkpw(input_pass_bytes, stored_hash):
+                playload = {
+                    "user_id": user_id,
+                    "email": log_user.email,
+                    "exp": datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+                }
+                token = jwt.encode(playload, SECRET_KEY, algorithm=ALGORITM)
                 cursor.close()
                 connect.close()
-                return {"message": "Успешный вход"}, 200
+                return {
+                    "message":"успешный вход",
+                    "token": token,
+                    "user_id": user_id,
+                    "email": log_user
+                }, 200
             else:
                 cursor.close()
                 connect.close()
