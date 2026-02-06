@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File
+from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.responses import FileResponse
 import uvicorn
 import psycopg2
@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from datetime import datetime, timedelta
 import jwt
+from datetime import datetime, timedelta, timezone
 
 
 
@@ -55,113 +56,107 @@ class LogUsers(BaseModel):
 def root():
     return "hello world"
 
-@app.get('/showusers')
-def show_users():
-
-
-    try: 
-        connect = psycopg2.connect(host=BD_HOST, database=BD_NAME, user=BD_USER, password=BD_PASSWORD)
-        print('соединение установлено')
-
-        cursor = connect.cursor()
-
-        select_qyery = "SELECT user_id, lname, fname, email, password_user FROM users"
-        cursor.execute(select_qyery)
-
-        rows = cursor.fetchall()
-        connect.close()
-        return rows
-
-    except:
-        print("Ошибка")
 
 #Добавление пользователя 
 @app.post('/users')
 def creat_users(new_users: NewUsers): 
-
-    #подключение postgresql
+    connect = None
     try:
+        
         password_bytes = new_users.password.encode('utf-8')
         salt = bcrypt.gensalt(rounds=12)
-        hashed_password = bcrypt.hashpw(password_bytes, salt)
-        user = (new_users.lastName, new_users.firstName, new_users.email, hashed_password)
-
+        hashed_password = bcrypt.hashpw(password_bytes, salt).decode('utf-8')
+        
         connect = psycopg2.connect(host=BD_HOST, database=BD_NAME, user=BD_USER, password=BD_PASSWORD)
-        print('соединение установлено')
-
         cursor = connect.cursor()
 
+        # ✅ ПРАВИЛЬНАЯ проверка email
         cursor.execute("SELECT email FROM users WHERE email = %s", (new_users.email,))
+        existing_user = cursor.fetchone()
         
-
-        if cursor.fetchone():
+        print(f"🔍 Пользователь существует: {bool(existing_user)}")  # Лог!
+        
+        if existing_user:  # ✅ Сохраняем результат сразу
             connect.close()
-            return {
-                "error" : "Эта почта уже зарегестрирована"
-            }, 409
+            raise HTTPException(status_code=409) 
         
-
-        insert_qyery = "INSERT INTO users (lname, fname, email, password_user) VALUES (%s, %s, %s, %s)"
-    
-        cursor.execute(insert_qyery, user)
+        # Регистрация...
+        insert_query = "INSERT INTO users (lname, fname, email, password_user, pass_byte) VALUES (%s, %s, %s, %s, %s)"
+        cursor.execute(insert_query, (new_users.lastName, new_users.firstName, new_users.email, hashed_password, hashed_password))
         connect.commit()
-        
         connect.close()
         
-        return {"success" : True, "message" : "Пользователь добавлен"}, 201
+        return {"success": True, "message": "Пользователь добавлен"}, 201
+    
+    except HTTPException:
+        raise
 
-
-    except (Exception, psycopg2.Error) as Error:
-        print("ошибка", Error)
-        if 'connection' in locals():
-            connect.close() 
+    except Exception as Error:
+        print(f"Ошибка: {Error}")
+        if connect:
+            connect.close()
         return {"error": "Ошибка базы данных"}, 500
+
+
     
 #Проверка логина
-@app.post("/users_log")
-def users_login(log_user : LogUsers):
-    try: 
-        connect = psycopg2.connect(host=BD_HOST, database=BD_NAME, user=BD_USER, password=BD_PASSWORD)  
+@app.post('/users_log')
+def userlog(log_users: LogUsers):
+    connect = None
+    try:
+        connect = psycopg2.connect(host=BD_HOST, database=BD_NAME, user=BD_USER, password=BD_PASSWORD)
         cursor = connect.cursor()
+        print('подключен')
+        
+        cursor.execute("SELECT password_user, user_id, email FROM users WHERE email = %s", (log_users.email,))
+        user_password = cursor.fetchone()
 
-        cursor.execute("SELECT user_id password_user from users WHERE email = %s", (log_user.email))
 
-        data_user = cursor.fetchone()
 
-        if data_user:
-            user_id, stored_hash = data_user
-            input_pass_bytes = log_user.password.encode('utf-8')
+        if not user_password[0]:
+            raise HTTPException(status_code=401)
 
-            if bcrypt.checkpw(input_pass_bytes, stored_hash):
-                playload = {
-                    "user_id": user_id,
-                    "email": log_user.email,
-                    "exp": datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-                }
-                token = jwt.encode(playload, SECRET_KEY, algorithm=ALGORITM)
-                cursor.close()
-                connect.close()
-                return {
-                    "message":"успешный вход",
-                    "token": token,
-                    "user_id": user_id,
-                    "email": log_user
-                }, 200
-            else:
-                cursor.close()
-                connect.close()
-                return {"message" : "Неверный пароль"}, 401
+
+        pass_byte = log_users.password.encode('utf-8')
+        user_password_byte = user_password[0][2:].encode('utf-8') 
+        
+        if isinstance(user_password[0], str) and user_password[0].startswith('\\x'):
+            user_password_byte = bytes.fromhex(user_password[0][2:])  
+        else:
+            user_password_byte = user_password[0] 
+        
+        print(f"Пароль из БД: {user_password[0]}")
+        print(f"Тип хеша: {type(user_password_byte)}")
+        print(f"Введенный пароль: {pass_byte}")
+        
+        if bcrypt.checkpw(pass_byte, user_password_byte):
+            print('пароль верный')
+
+            pyload = {
+                "sub" : user_password[1],
+                "name" : user_password[2],
+                "iat" : datetime.now(timezone.utc),
+                "exp" : datetime.now(timezone.utc) + timedelta(hours=24)
+            }
             
-        connect.close()
-        cursor.close()
-        return {"message": "Пользователь не найден"}, 404
+            token = jwt.encode(pyload, SECRET_KEY, algorithm=ALGORITM)
 
-    except (Exception, psycopg2.Error) as Error:
-        print(Error)
-        if 'connect' in locals():
-            connect.close()
-        return {"error": "Ошибка базы данных"}, 500
+            return {"success": True, "token": token} 
+        else:
+            print('пароль не верный')
+            raise HTTPException(status_code=401)
+        
+    except HTTPException:
+        raise
+
+    except Exception as e:
+        print(f"ОШИБКА: {e}")  # ✅ Показываем реальную ошибку!
+        raise HTTPException(status_code=401)
     
+    finally:
+        if connect:
+            connect.close()  # ✅ Всегда закрываем соединение
+
 
 #передача фотографии 
 
