@@ -13,7 +13,9 @@ from datetime import datetime, timedelta
 import jwt
 from datetime import datetime, timedelta, timezone
 from fastapi.staticfiles import StaticFiles
-
+from fastapi import APIRouter
+import psycopg2
+from typing import List
 
 
 app = FastAPI()
@@ -471,7 +473,7 @@ async def get_messages(chat_id: int, limit: int = 50, user_id: int = 1):  # ✅ 
         
     except Exception as e:
         print(f"❌ ОШИБКА: {e}")
-        raise HTTPException(status_code=500, detail=f"Ошибка БД: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Ошибка  БД: {str(e)}")
     finally:
         if cursor:
             cursor.close()
@@ -502,6 +504,57 @@ def postmessage(messagedata : Message):
             cursor.close()
         if connect:
             connect.close()
+
+
+
+@app.get('/getchat/{id}')
+def getchat(id: int):  # ← int!
+    connect = None
+    cursor = None
+    try:
+        connect = psycopg2.connect(
+            host=BD_HOST, 
+            database=BD_NAME, 
+            user=BD_USER, 
+            password=BD_PASSWORD
+        )
+        cursor = connect.cursor()
+
+        # Добавили GROUP BY для уникальных собеседников
+        cursor.execute('''
+            SELECT cu2.user_id, ui2.fname, ui2.lname, ui2.profile_image
+            FROM chat_users cu1
+            JOIN chat_users cu2 ON cu1.chat_id = cu2.chat_id
+            JOIN users_information ui2 ON cu2.user_id = ui2.id
+            WHERE cu1.user_id = %s 
+            AND cu2.user_id != %s;
+        ''', (id, id))
+
+        content = cursor.fetchall()  # → [(42,), (43,)]
+        
+        # Правильное преобразование в dict
+        result = []
+
+        for i in content:
+            result.append({
+                'id' : i[0],
+                'lname' : i[1],
+                'fname': i[2],
+                'profile_image' :i[3]
+            })
+        
+        print(f"Найдено собеседников для {id}: {result}")
+        return {'message' : result}
+        
+    except Exception as e:
+        print(f'Ошибка: {e}')
+        return {'error': 'Не удалось получить чаты'}
+    finally:
+        if cursor:
+            cursor.close()
+        if connect:
+            connect.close()
+
 
 if __name__ == '__main__':
     uvicorn.run('main:app', host='0.0.0.0', port=8000, reload=True)
